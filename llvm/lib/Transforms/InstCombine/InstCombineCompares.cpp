@@ -7225,6 +7225,12 @@ Instruction *InstCombinerImpl::visitICmpInst(ICmpInst &I) {
 Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
                                                     Instruction *LHSI,
                                                     Constant *RHSC) {
+  if (RHSC->getType()->isVectorTy()) {
+    Constant *CV = RHSC->getSplatValue(false);
+    if (CV) {
+      RHSC = CV;
+    }
+  }
   if (!isa<ConstantFP>(RHSC)) return nullptr;
   const APFloat &RHS = cast<ConstantFP>(RHSC)->getValueAPF();
 
@@ -7233,14 +7239,25 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
   int MantissaWidth = LHSI->getType()->getFPMantissaWidth();
   if (MantissaWidth == -1) return nullptr;  // Unknown.
 
-  IntegerType *IntTy = cast<IntegerType>(LHSI->getOperand(0)->getType());
+  auto *IntTy = LHSI->getOperand(0)->getType();
 
+  unsigned IntWidth = IntTy->getScalarSizeInBits();
   bool LHSUnsigned = isa<UIToFPInst>(LHSI);
+
+  Value *False, *True;
+  if (IntTy->isVectorTy()) {
+    ElementCount EC = cast<VectorType>(IntTy)->getElementCount();
+    True = Builder.CreateVectorSplat(EC, Builder.getTrue());
+    False = Builder.CreateVectorSplat(EC, Builder.getFalse());
+  } else {
+    True = Builder.getTrue();
+    False = Builder.getFalse();
+  }
 
   if (I.isEquality()) {
     FCmpInst::Predicate P = I.getPredicate();
     bool IsExact = false;
-    APSInt RHSCvt(IntTy->getBitWidth(), LHSUnsigned);
+    APSInt RHSCvt(IntWidth, LHSUnsigned);
     RHS.convertToInteger(RHSCvt, APFloat::rmNearestTiesToEven, &IsExact);
 
     // If the floating point constant isn't an integer value, we know if we will
@@ -7251,10 +7268,10 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
       RHSRoundInt.roundToIntegral(APFloat::rmNearestTiesToEven);
       if (RHS != RHSRoundInt) {
         if (P == FCmpInst::FCMP_OEQ || P == FCmpInst::FCMP_UEQ)
-          return replaceInstUsesWith(I, Builder.getFalse());
+          return replaceInstUsesWith(I, False);
 
         assert(P == FCmpInst::FCMP_ONE || P == FCmpInst::FCMP_UNE);
-        return replaceInstUsesWith(I, Builder.getTrue());
+        return replaceInstUsesWith(I, True);
       }
     }
 
@@ -7265,23 +7282,23 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
   // Check to see that the input is converted from an integer type that is small
   // enough that preserves all bits.  TODO: check here for "known" sign bits.
   // This would allow us to handle (fptosi (x >>s 62) to float) if x is i64 f.e.
-  unsigned InputSize = IntTy->getScalarSizeInBits();
 
-  // Following test does NOT adjust InputSize downwards for signed inputs,
+
+  // Following test does NOT adjust IntWidth downwards for signed inputs,
   // because the most negative value still requires all the mantissa bits
   // to distinguish it from one less than that value.
-  if ((int)InputSize > MantissaWidth) {
+  if ((int)IntWidth > MantissaWidth) {
     // Conversion would lose accuracy. Check if loss can impact comparison.
     int Exp = ilogb(RHS);
     if (Exp == APFloat::IEK_Inf) {
       int MaxExponent = ilogb(APFloat::getLargest(RHS.getSemantics()));
-      if (MaxExponent < (int)InputSize - !LHSUnsigned)
+      if (MaxExponent < (int)IntWidth - !LHSUnsigned)
         // Conversion could create infinity.
         return nullptr;
     } else {
       // Note that if RHS is zero or NaN, then Exp is negative
       // and first condition is trivially false.
-      if (MantissaWidth <= Exp && Exp <= (int)InputSize - !LHSUnsigned)
+      if (MantissaWidth <= Exp && Exp <= (int)IntWidth - !LHSUnsigned)
         // Conversion could affect comparison.
         return nullptr;
     }
@@ -7320,17 +7337,15 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
     Pred = ICmpInst::ICMP_NE;
     break;
   case FCmpInst::FCMP_ORD:
-    return replaceInstUsesWith(I, Builder.getTrue());
+    return replaceInstUsesWith(I, True);
   case FCmpInst::FCMP_UNO:
-    return replaceInstUsesWith(I, Builder.getFalse());
+    return replaceInstUsesWith(I, False);
   }
 
   // Now we know that the APFloat is a normal number, zero or inf.
 
   // See if the FP constant is too large for the integer.  For example,
   // comparing an i8 to 300.0.
-  unsigned IntWidth = IntTy->getScalarSizeInBits();
-
   if (!LHSUnsigned) {
     // If the RHS value is > SignedMax, fold the comparison.  This handles +INF
     // and large values.
@@ -7340,8 +7355,8 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
     if (SMax < RHS) { // smax < 13123.0
       if (Pred == ICmpInst::ICMP_NE  || Pred == ICmpInst::ICMP_SLT ||
           Pred == ICmpInst::ICMP_SLE)
-        return replaceInstUsesWith(I, Builder.getTrue());
-      return replaceInstUsesWith(I, Builder.getFalse());
+        return replaceInstUsesWith(I, True);
+      return replaceInstUsesWith(I, False);
     }
   } else {
     // If the RHS value is > UnsignedMax, fold the comparison. This handles
@@ -7352,8 +7367,8 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
     if (UMax < RHS) { // umax < 13123.0
       if (Pred == ICmpInst::ICMP_NE  || Pred == ICmpInst::ICMP_ULT ||
           Pred == ICmpInst::ICMP_ULE)
-        return replaceInstUsesWith(I, Builder.getTrue());
-      return replaceInstUsesWith(I, Builder.getFalse());
+        return replaceInstUsesWith(I, True);
+      return replaceInstUsesWith(I, False);
     }
   }
 
@@ -7365,8 +7380,8 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
     if (SMin > RHS) { // smin > 12312.0
       if (Pred == ICmpInst::ICMP_NE || Pred == ICmpInst::ICMP_SGT ||
           Pred == ICmpInst::ICMP_SGE)
-        return replaceInstUsesWith(I, Builder.getTrue());
-      return replaceInstUsesWith(I, Builder.getFalse());
+        return replaceInstUsesWith(I, True);
+      return replaceInstUsesWith(I, False);
     }
   } else {
     // See if the RHS value is < UnsignedMin.
@@ -7376,8 +7391,8 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
     if (UMin > RHS) { // umin > 12312.0
       if (Pred == ICmpInst::ICMP_NE || Pred == ICmpInst::ICMP_UGT ||
           Pred == ICmpInst::ICMP_UGE)
-        return replaceInstUsesWith(I, Builder.getTrue());
-      return replaceInstUsesWith(I, Builder.getFalse());
+        return replaceInstUsesWith(I, True);
+      return replaceInstUsesWith(I, False);
     }
   }
 
@@ -7396,14 +7411,14 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
       switch (Pred) {
       default: llvm_unreachable("Unexpected integer comparison!");
       case ICmpInst::ICMP_NE:  // (float)int != 4.4   --> true
-        return replaceInstUsesWith(I, Builder.getTrue());
+        return replaceInstUsesWith(I, True);
       case ICmpInst::ICMP_EQ:  // (float)int == 4.4   --> false
-        return replaceInstUsesWith(I, Builder.getFalse());
+        return replaceInstUsesWith(I, False);
       case ICmpInst::ICMP_ULE:
         // (float)int <= 4.4   --> int <= 4
         // (float)int <= -4.4  --> false
         if (RHS.isNegative())
-          return replaceInstUsesWith(I, Builder.getFalse());
+          return replaceInstUsesWith(I, False);
         break;
       case ICmpInst::ICMP_SLE:
         // (float)int <= 4.4   --> int <= 4
@@ -7415,7 +7430,7 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
         // (float)int < -4.4   --> false
         // (float)int < 4.4    --> int <= 4
         if (RHS.isNegative())
-          return replaceInstUsesWith(I, Builder.getFalse());
+          return replaceInstUsesWith(I, False);
         Pred = ICmpInst::ICMP_ULE;
         break;
       case ICmpInst::ICMP_SLT:
@@ -7428,7 +7443,7 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
         // (float)int > 4.4    --> int > 4
         // (float)int > -4.4   --> true
         if (RHS.isNegative())
-          return replaceInstUsesWith(I, Builder.getTrue());
+          return replaceInstUsesWith(I, True);
         break;
       case ICmpInst::ICMP_SGT:
         // (float)int > 4.4    --> int > 4
@@ -7440,7 +7455,7 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
         // (float)int >= -4.4   --> true
         // (float)int >= 4.4    --> int > 4
         if (RHS.isNegative())
-          return replaceInstUsesWith(I, Builder.getTrue());
+          return replaceInstUsesWith(I, True);
         Pred = ICmpInst::ICMP_UGT;
         break;
       case ICmpInst::ICMP_SGE:
@@ -7451,6 +7466,12 @@ Instruction *InstCombinerImpl::foldFCmpIntToFPConst(FCmpInst &I,
         break;
       }
     }
+  }
+  if (IntTy->isVectorTy()) {
+    Value *RHSV = Builder.CreateVectorSplat(
+                     cast<VectorType>(IntTy)->getElementCount(),
+                     Builder.getInt(RHSInt));
+    return new ICmpInst(Pred, LHSI->getOperand(0), RHSV);
   }
 
   // Lower this FP comparison into an appropriate integer version of the

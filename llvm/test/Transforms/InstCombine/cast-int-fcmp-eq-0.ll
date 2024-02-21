@@ -509,3 +509,115 @@ define i1 @i128_cast_cmp_oeq_int_inf_uitofp(i128 %i) {
   %cmp = fcmp oeq float %f, 0x7FF0000000000000
   ret i1 %cmp
 }
+
+define <2 x i1> @i32_vec_cast_cmp_oeq_vec_int_0_sitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_oeq_vec_int_0_sitofp(
+; CHECK-NEXT:    [[CMP:%.*]] = icmp eq <2 x i32> [[I:%.*]], zeroinitializer
+; CHECK-NEXT:    ret <2 x i1> [[CMP]]
+;
+  %f = sitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp oeq <2 x float> %f, <float 0.0, float 0.0>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_oeq_vec_int_0_uitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_oeq_vec_int_0_uitofp(
+; CHECK-NEXT:    [[CMP:%.*]] = icmp eq <2 x i32> [[I:%.*]], zeroinitializer
+; CHECK-NEXT:    ret <2 x i1> [[CMP]]
+;
+  %f = uitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp oeq <2 x float> %f, <float 0.0, float 0.0>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_une_vec_int_0_sitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_une_vec_int_0_sitofp(
+; CHECK-NEXT:    [[CMP:%.*]] = icmp ne <2 x i32> [[I:%.*]], zeroinitializer
+; CHECK-NEXT:    ret <2 x i1> [[CMP]]
+;
+  %f = sitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp une <2 x float> %f, <float 0.0, float 0.0>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_ueq_vec_int_0_sitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_ueq_vec_int_0_sitofp(
+; CHECK-NEXT:    [[CMP:%.*]] = icmp eq <2 x i32> [[I:%.*]], zeroinitializer
+; CHECK-NEXT:    ret <2 x i1> [[CMP]]
+;
+  %f = sitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp ueq <2 x float> %f, <float 0.0, float 0.0>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_oeq_half_uitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_oeq_half_uitofp(
+; CHECK-NEXT:    ret <2 x i1> zeroinitializer
+;
+  %f = uitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp oeq <2 x float> %f, <float 0.5, float 0.5>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_oeq_half_sitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_oeq_half_sitofp(
+; CHECK-NEXT:    ret <2 x i1> zeroinitializer
+;
+  %f = sitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp oeq <2 x float> %f, <float 0.5, float 0.5>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_one_half_uitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_one_half_uitofp(
+; CHECK-NEXT:    ret <2 x i1> <i1 true, i1 true>
+;
+  %f = uitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp one <2 x float> %f, <float 0.5, float 0.5>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_one_half_sitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_one_half_sitofp(
+; CHECK-NEXT:    ret <2 x i1> <i1 true, i1 true>
+;
+  %f = sitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp one <2 x float> %f, <float 0.5, float 0.5>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_ueq_half_uitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_ueq_half_uitofp(
+; CHECK-NEXT:    ret <2 x i1> zeroinitializer
+;
+  %f = uitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp ueq <2 x float> %f, <float 0.5, float 0.5>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_ueq_half_sitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_ueq_half_sitofp(
+; CHECK-NEXT:    ret <2 x i1> zeroinitializer
+;
+  %f = sitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp ueq <2 x float> %f, <float 0.5, float 0.5>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_une_half_uitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_une_half_uitofp(
+; CHECK-NEXT:    ret <2 x i1> <i1 true, i1 true>
+;
+  %f = uitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp une <2 x float> %f, <float 0.5, float 0.5>
+  ret <2 x i1> %cmp
+}
+
+define <2 x i1> @i32_vec_cast_cmp_une_half_sitofp(<2 x i32> %i) {
+; CHECK-LABEL: @i32_vec_cast_cmp_une_half_sitofp(
+; CHECK-NEXT:    ret <2 x i1> <i1 true, i1 true>
+;
+  %f = sitofp <2 x i32> %i to <2 x float>
+  %cmp = fcmp une <2 x float> %f, <float 0.5, float 0.5>
+  ret <2 x i1> %cmp
+}
