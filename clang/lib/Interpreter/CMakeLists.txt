@@ -19,6 +19,7 @@ add_clang_library(clangInterpreter
   IncrementalParser.cpp
   Interpreter.cpp
   InterpreterUtils.cpp
+  RemoteJITUtils.cpp
   Value.cpp
 
   DEPENDS

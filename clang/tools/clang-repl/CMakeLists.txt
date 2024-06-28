@@ -11,7 +11,6 @@ set( LLVM_LINK_COMPONENTS
 
 add_clang_tool(clang-repl
   ClangRepl.cpp
-  RemoteJITUtils.cpp
   )
 
 if(MSVC)
