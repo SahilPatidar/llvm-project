@@ -58,6 +58,10 @@ static llvm::cl::opt<std::string> OOPExecutorConnectTCP(
 static llvm::cl::opt<std::string>
     OrcRuntimePath("orc-runtime", llvm::cl::desc("Path to the ORC runtime"),
                    llvm::cl::cat(OOPCategory));
+static llvm::cl::opt<bool> UseSharedMemory(
+    "use-shared-memory",
+    llvm::cl::desc("Use shared memory to transfer generated code and data"),
+    llvm::cl::init(false), llvm::cl::cat(OOPCategory));
 static llvm::cl::list<std::string>
     ClangArgs("Xcc",
               llvm::cl::desc("Argument to pass to the CompilerInvocation"),
@@ -246,7 +250,7 @@ int main(int argc, const char **argv) {
   std::unique_ptr<llvm::orc::ExecutorProcessControl> EPC;
   if (OOPExecutor.getNumOccurrences()) {
     // Launch an out-of-process executor locally in a child process.
-    EPC = ExitOnErr(launchExecutor(OOPExecutor));
+    EPC = ExitOnErr(launchExecutor(OOPExecutor, UseSharedMemory));
   } else if (OOPExecutorConnectTCP.getNumOccurrences()) {
     EPC = ExitOnErr(connectTCPSocket(OOPExecutorConnectTCP));
   }

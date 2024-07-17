@@ -25,7 +25,7 @@
 #include <string>
 
 llvm::Expected<std::unique_ptr<llvm::orc::SimpleRemoteEPC>>
-launchExecutor(llvm::StringRef ExecutablePath);
+launchExecutor(llvm::StringRef ExecutablePath, bool UseSharedMemory);
 
 /// Create a JITLinkExecutor that connects to the given network address
 /// through a TCP socket. A valid NetworkAddress provides hostname and port,

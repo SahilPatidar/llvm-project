@@ -12,6 +12,8 @@
 #include "llvm/ExecutionEngine/Orc/DebugObjectManagerPlugin.h"
 #include "llvm/ExecutionEngine/Orc/EPCDebugObjectRegistrar.h"
 #include "llvm/ExecutionEngine/Orc/EPCDynamicLibrarySearchGenerator.h"
+#include "llvm/ExecutionEngine/Orc/MapperJITLinkMemoryManager.h"
+#include "llvm/ExecutionEngine/Orc/Shared/OrcRTBridge.h"
 #include "llvm/ExecutionEngine/Orc/Shared/SimpleRemoteEPCUtils.h"
 #include "llvm/ExecutionEngine/Orc/TargetProcess/JITLoaderGDB.h"
 #include "llvm/Support/FileSystem.h"
@@ -27,8 +29,34 @@
 using namespace llvm;
 using namespace llvm::orc;
 
+
+Expected<std::unique_ptr<jitlink::JITLinkMemoryManager>>
+createSharedMemoryManager(SimpleRemoteEPC &SREPC) {
+  SharedMemoryMapper::SymbolAddrs SAs;
+  if (auto Err = SREPC.getBootstrapSymbols(
+          {{SAs.Instance, rt::ExecutorSharedMemoryMapperServiceInstanceName},
+           {SAs.Reserve,
+            rt::ExecutorSharedMemoryMapperServiceReserveWrapperName},
+           {SAs.Initialize,
+            rt::ExecutorSharedMemoryMapperServiceInitializeWrapperName},
+           {SAs.Deinitialize,
+            rt::ExecutorSharedMemoryMapperServiceDeinitializeWrapperName},
+           {SAs.Release,
+            rt::ExecutorSharedMemoryMapperServiceReleaseWrapperName}}))
+    return std::move(Err);
+
+#ifdef _WIN32
+  size_t SlabSize = 1024 * 1024;
+#else
+  size_t SlabSize = 1024 * 1024 * 1024;
+#endif
+
+  return MapperJITLinkMemoryManager::CreateWithMapper<SharedMemoryMapper>(
+      SlabSize, SREPC, SAs);
+}
+
 Expected<std::unique_ptr<SimpleRemoteEPC>>
-launchExecutor(StringRef ExecutablePath) {
+launchExecutor(StringRef ExecutablePath, bool UseSharedMemory) {
 #ifndef LLVM_ON_UNIX
   // FIXME: Add support for Windows.
   return make_error<StringError>("-" + ExecutablePath +
@@ -100,6 +128,9 @@ launchExecutor(StringRef ExecutablePath) {
   close(FromExecutor[WriteEnd]);
 
   auto S = SimpleRemoteEPC::Setup();
+
+  if (UseSharedMemory)
+    S.CreateMemoryManager = createSharedMemoryManager;
 
   return SimpleRemoteEPC::Create<FDSimpleRemoteEPCTransport>(
       std::make_unique<DynamicThreadPoolTaskDispatcher>(std::nullopt),
