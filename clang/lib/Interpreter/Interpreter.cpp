@@ -46,6 +46,7 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Timer.h"
 #include "llvm/TargetParser/Host.h"
 
 #include <cstdarg>
@@ -493,9 +494,15 @@ llvm::Error Interpreter::ParseAndExecute(llvm::StringRef Code, Value *V) {
   auto PTU = Parse(Code);
   if (!PTU)
     return PTU.takeError();
+
+  // llvm::TimerGroup MyTimerGroup("MyGroup", "Description of My Timer Group");
+
+  // llvm::Timer MyTimer("MyTimer", "Description of My Timer", MyTimerGroup);
+  // MyTimer.startTimer();
   if (PTU->TheModule)
     if (llvm::Error Err = Execute(*PTU))
       return Err;
+  // MyTimer.stopTimer();
 
   if (LastValue.isValid()) {
     if (!V) {

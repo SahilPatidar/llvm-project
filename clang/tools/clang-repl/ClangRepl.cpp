@@ -26,6 +26,7 @@
 #include "llvm/Support/ManagedStatic.h" // llvm_shutdown
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/Timer.h"
 #include "llvm/TargetParser/Host.h"
 #include <optional>
 
@@ -62,6 +63,12 @@ static llvm::cl::opt<bool> UseSharedMemory(
     "use-shared-memory",
     llvm::cl::desc("Use shared memory to transfer generated code and data"),
     llvm::cl::init(false), llvm::cl::cat(OOPCategory));
+static llvm::cl::opt<std::string> SlabAllocateSizeString(
+    "slab-allocate",
+    llvm::cl::desc("Allocate from a slab of the given size "
+             "(allowable suffixes: Kb, Mb, Gb. default = "
+             "Kb)"),
+    llvm::cl::init(""), llvm::cl::cat(OOPCategory));
 static llvm::cl::list<std::string>
     ClangArgs("Xcc",
               llvm::cl::desc("Argument to pass to the CompilerInvocation"),
@@ -253,6 +260,15 @@ int main(int argc, const char **argv) {
     EPC = ExitOnErr(launchExecutor(OOPExecutor, UseSharedMemory));
   } else if (OOPExecutorConnectTCP.getNumOccurrences()) {
     EPC = ExitOnErr(connectTCPSocket(OOPExecutorConnectTCP));
+  } else if (!OrcRuntimePath.empty()) {
+      std::unique_ptr<llvm::orc::TaskDispatcher> D = nullptr;
+
+      D = std::make_unique<llvm::orc::DynamicThreadPoolTaskDispatcher>(std::nullopt);
+
+      // D = std::make_unique<InPlaceTaskDispatcher>();
+    if (auto EPCOrErr =
+            llvm::orc::SelfExecutorProcessControl::Create(nullptr, std::move(D), nullptr))
+      EPC = std::move(*EPCOrErr);
   }
 
   std::unique_ptr<llvm::orc::LLJITBuilder> JB;
@@ -328,6 +344,10 @@ int main(int argc, const char **argv) {
       if (Input == R"(%quit)") {
         break;
       }
+      llvm::TimerGroup MyTimerGroup("MyGroup", "Description of My Timer Group");
+
+  llvm::Timer MyTimer("MyTimer", "Description of My Timer", MyTimerGroup);
+  MyTimer.startTimer();
       if (Input == R"(%undo)") {
         if (auto Err = Interp->Undo())
           llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
@@ -337,7 +357,7 @@ int main(int argc, const char **argv) {
       } else if (auto Err = Interp->ParseAndExecute(Input)) {
         llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
       }
-
+  MyTimer.stopTimer();
       Input = "";
       LE.setPrompt("clang-repl> ");
     }

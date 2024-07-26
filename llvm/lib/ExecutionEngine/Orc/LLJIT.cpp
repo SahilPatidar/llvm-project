@@ -623,19 +623,27 @@ Error ORCPlatformSupport::initialize(orc::JITDylib &JD) {
       InitializedDylib.insert(&JD);
   }
 
-  if (auto WrapperAddr =
-          ES.lookup(MainSearchOrder, J.mangleAndIntern(WrapperToCall))) {
+  StringRef WrapperToCall = "__orc_rt_jit_dlopen_wrapper";
+  bool dlupdate = false;
+  if (ES.getTargetTriple().isOSBinFormatMachO()) {
+    if (InitializedDylib.contains(&JD)) {
+      WrapperToCall = "__orc_rt_jit_dlupdate_wrapper";
+      dlupdate = true;
+    } else
+      InitializedDylib.insert(&JD);
+  }
+
+  if (auto WrapperAddr = ES.lookup(
+          MainSearchOrder, J.mangleAndIntern(WrapperToCall))) {
     if (dlupdate) {
       int32_t result;
       auto E = ES.callSPSWrapper<SPSDLUpdateSig>(WrapperAddr->getAddress(),
                                                  result, DSOHandles[&JD],
                                                  int32_t(ORC_RT_RTLD_LAZY));
-      if (E)
-        return E;
-      else if (result)
+      if (result)
         return make_error<StringError>("dlupdate failed",
                                        inconvertibleErrorCode());
-      return Error::success();
+      return E;
     }
     return ES.callSPSWrapper<SPSDLOpenSig>(WrapperAddr->getAddress(),
                                            DSOHandles[&JD], JD.getName(),

@@ -385,7 +385,7 @@ private:
   Error dlupdateFull(std::unique_lock<std::mutex> &JDStatesLock,
                      JITDylibState &JDS);
   Error dlupdateInitialize(std::unique_lock<std::mutex> &JDStatesLock,
-                           JITDylibState &JDS);
+                         JITDylibState &JDS);
 
   Error dlcloseImpl(void *DSOHandle);
   Error dlcloseDeinitialize(std::unique_lock<std::mutex> &JDStatesLock,
@@ -1265,10 +1265,11 @@ Error MachOPlatformRuntimeState::dlopenInitialize(
   return Error::success();
 }
 
-Error MachOPlatformRuntimeState::dlupdateImpl(void *DSOHandle, int Mode) {
+Error MachOPlatformRuntimeState::dlupdateImpl(void *DSOHandle,
+                                                       int Mode) {
   std::unique_lock<std::mutex> Lock(JDStatesMutex);
 
-  // Try to find JITDylib state by DSOHandle.
+  // Try to find JITDylib state by name.
   auto *JDS = getJITDylibStateByHeader(DSOHandle);
 
   if (!JDS) {
@@ -1278,7 +1279,7 @@ Error MachOPlatformRuntimeState::dlupdateImpl(void *DSOHandle, int Mode) {
   }
 
   if (!JDS->referenced())
-    return make_error<StringError>("dlupdate failed, JITDylib must be open.");
+    return make_error<StringError>("Dylib must be referenced");
 
   if (!JDS->Sealed) {
     if (auto Err = dlupdateFull(Lock, *JDS))
@@ -1295,9 +1296,8 @@ Error MachOPlatformRuntimeState::dlupdateFull(
   // Unlock so that we can accept the initializer update.
   JDStatesLock.unlock();
   if (auto Err = WrapperFunction<SPSExpected<SPSMachOJITDylibDepInfoMap>(
-          SPSExecutorAddr)>::
-          call(JITDispatch(&__orc_rt_macho_push_initializers_tag), DepInfo,
-               ExecutorAddr::fromPtr(JDS.Header)))
+          SPSExecutorAddr)>::call(&__orc_rt_macho_push_initializers_tag,
+                                  DepInfo, ExecutorAddr::fromPtr(JDS.Header)))
     return Err;
   JDStatesLock.lock();
 
@@ -1313,12 +1313,12 @@ Error MachOPlatformRuntimeState::dlupdateFull(
 Error MachOPlatformRuntimeState::dlupdateInitialize(
     std::unique_lock<std::mutex> &JDStatesLock, JITDylibState &JDS) {
   ORC_RT_DEBUG({
-    printdbg("MachOPlatformRuntimeState::dlupdateInitialize(\"%s\")\n",
+    printdbg("MachOPlatformRuntimeState::dlopenInitialize(\"%s\")\n",
              JDS.Name.c_str());
   });
 
   // Initialize this JITDylib.
-  if (auto Err = registerObjCRegistrationObjects(JDStatesLock, JDS))
+  if (auto Err = registerObjCRegistrationObjects(JDS))
     return Err;
   if (auto Err = runModInits(JDStatesLock, JDS))
     return Err;
