@@ -117,6 +117,7 @@ public:
 
   const char *dlerror();
   void *dlopen(std::string_view Name, int Mode);
+  int dlupdate(void *DSOHandle, int Mode);
   int dlclose(void *DSOHandle);
   void *dlsym(void *DSOHandle, std::string_view Symbol);
 
@@ -158,6 +159,7 @@ private:
 
   std::recursive_mutex JDStatesMutex;
   std::unordered_map<void *, PerJITDylibState> JDStates;
+  std::unordered_map<void *, std::string> JDHeaderToName;
   std::unordered_map<std::string, void *> JDNameToHeader;
 
   std::mutex ThreadDataSectionsMutex;
@@ -236,6 +238,20 @@ void *ELFNixPlatformRuntimeState::dlopen(std::string_view Path, int Mode) {
   }
 
   return *H;
+}
+
+int ELFNixPlatformRuntimeState::dlupdate(void *DSOHandle, int Mode) {
+  std::lock_guard<std::recursive_mutex> Lock(JDStatesMutex);
+  auto J = JDHeaderToName.find(DSOHandle);
+  assert(J != JDHeaderToName.end() &&
+         "JITDylib has no header map entry");
+  auto H = dlopenInitialize(J->second, Mode);
+  if (!H) {
+    DLFcnError = toString(H.takeError());
+    return -1;
+  }
+
+  return 0;
 }
 
 int ELFNixPlatformRuntimeState::dlclose(void *DSOHandle) {
@@ -582,6 +598,10 @@ const char *__orc_rt_elfnix_jit_dlerror() {
 
 void *__orc_rt_elfnix_jit_dlopen(const char *path, int mode) {
   return ELFNixPlatformRuntimeState::get().dlopen(path, mode);
+}
+
+int __orc_rt_elfnix_jit_dlupdate(void *dso_handle, int mode) {
+  return ELFNixPlatformRuntimeState::get().dlupdate(dso_handle, mode);
 }
 
 int __orc_rt_elfnix_jit_dlclose(void *dso_handle) {
