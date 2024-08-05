@@ -616,34 +616,6 @@ Error ELFNixPlatformRuntimeState::dlcloseInitialize(
   return Error::success();
 }
 
-// Expected<void *>
-// ELFNixPlatformRuntimeState::dlopenInitialize(std::string_view Path, int Mode) {
-//   // Either our JITDylib wasn't loaded, or it or one of its dependencies allows
-//   // reinitialization. We need to call in to the JIT to see if there's any new
-//   // work pending.
-//   // std::unique_lock<std::mutex> Lock(JDStatesMutex);
-//   auto InitSeq = getJITDylibInitializersByName(Path);
-//   if (!InitSeq)
-//     return InitSeq.takeError();
-
-//   // Init sequences should be non-empty.
-//   if (InitSeq->empty())
-//     return make_error<StringError>(
-//         "__orc_rt_elfnix_get_initializers returned an "
-//         "empty init sequence");
-
-//   // Otherwise register and run initializers for each JITDylib.
-//   for (auto &MOJDIs : *InitSeq)
-//     if (auto Err = initializeJITDylib(MOJDIs))
-//       return std::move(Err);
-
-//   // Return the header for the last item in the list.
-//   auto *JDS = getJITDylibStateByHeaderAddr(
-//       InitSeq->back().DSOHandleAddress.toPtr<void *>());
-//   assert(JDS && "Missing state entry for JD");
-//   return JDS->Header;
-// }
-
 long getPriority(const std::string &name) {
   auto pos = name.find_last_not_of("0123456789");
   if (pos == name.size() - 1)
@@ -712,17 +684,6 @@ void destroyELFNixTLVMgr(void *ELFNixTLVMgr) {
 //------------------------------------------------------------------------------
 //                             JIT entry points
 //------------------------------------------------------------------------------
-
-// ORC_RT_INTERFACE orc_rt_CWrapperFunctionResult
-// __orc_rt_elfnix_platform_bootstrap(char *ArgData, size_t ArgSize) {
-//   return WrapperFunction<void(uint64_t)>::handle(
-//              ArgData, ArgSize,
-//              [](uint64_t &DSOHandle) {
-//                ELFNixPlatformRuntimeState::initialize(
-//                    reinterpret_cast<void *>(DSOHandle));
-//              })
-//       .release();
-// }
 
 ORC_RT_INTERFACE orc_rt_CWrapperFunctionResult
 __orc_rt_elfnix_platform_bootstrap(char *ArgData, size_t ArgSize) {

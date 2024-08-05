@@ -435,13 +435,6 @@ ELFNixPlatform::ELFNixPlatform(
     return;
   }
 
-  // Lookup addresses of runtime functions callable by the platform,
-  // call the platform bootstrap function to initialize the platform-state
-  // object in the executor.
-  // if (auto E2 = bootstrapELFNixRuntime(PlatformJD)) {
-  //   Err = std::move(E2);
-  //   return;
-  // }
 }
 
 Error ELFNixPlatform::associateRuntimeSupportFunctions(JITDylib &PlatformJD) {
@@ -823,19 +816,6 @@ Error ELFNixPlatform::registerPerObjectSections(
     const ELFPerObjectSectionsToRegister &POSR, jitlink::LinkGraph &G,
     bool InBootstrapPhase) {
 
-  // if (!orc_rt_elfnix_register_object_sections)
-  //   return make_error<StringError>("Attempting to register per-object "
-  //                                  "sections, but runtime support has not "
-  //                                  "been loaded yet",
-  //                                  inconvertibleErrorCode());
-
-  // Error ErrResult = Error::success();
-  // if (auto Err = ES.callSPSWrapper<shared::SPSError(
-  //                    SPSELFPerObjectSectionsToRegister)>(
-  //         orc_rt_elfnix_register_object_sections, ErrResult, POSR))
-  //   return Err;
-  // return ErrResult;
-
   if (!RegisterObjectSections.Addr)
     return make_error<StringError>("Attempting to register per-object "
                                    "sections, but runtime support has not "
@@ -880,7 +860,6 @@ void ELFNixPlatform::ELFNixPlatformPlugin::modifyPassConfig(
   bool InBootstrapPhase =
       &MR.getTargetJITDylib() == &MP.PlatformJD && MP.Bootstrap;
 
-  // If we're in the bootstrap phase then increment the active graphs.
   if (InBootstrapPhase) {
     Config.PrePrunePasses.push_back(
         [this](LinkGraph &G) { return bootstrapPipelineStart(G); });
@@ -889,18 +868,6 @@ void ELFNixPlatform::ELFNixPlatformPlugin::modifyPassConfig(
     });
   }
 
-  // If the initializer symbol is the __dso_handle symbol then just add
-  // the DSO handle support passes.
-  // if (MR.getInitializerSymbol() == MP.DSOHandleSymbol && !InBootstrapPhase) {
-  //   addDSOHandleSupportPasses(MR, Config);
-  //   // The DSOHandle materialization unit doesn't require any other
-  //   // support, so we can bail out early.
-  //   return;
-  // }
-
-  // // If the object contains initializers then add passes to record them.
-  // if (MR.getInitializerSymbol())
-  //   addInitializerSupportPasses(MR, Config);
   // If the initializer symbol is the __dso_handle symbol then just add
   // the DSO handle support passes.
   if (auto InitSymbol = MR.getInitializerSymbol()) {
@@ -919,10 +886,6 @@ void ELFNixPlatform::ELFNixPlatformPlugin::modifyPassConfig(
     });
   }
 
-
-  // if (MR.getInitializerSymbol())
-  //   addInitializerSupportPasses(MR, Config);
-
   // Add passes for eh-frame and TLV support.
   addEHAndTLVSupportPasses(MR, Config, InBootstrapPhase);
 
@@ -932,8 +895,6 @@ void ELFNixPlatform::ELFNixPlatformPlugin::modifyPassConfig(
         return registerInitSections(G, JD, InBootstrapPhase);
       });
 
-    // If we're in the bootstrap phase then steal allocation actions and then
-  // decrement the active graphs.
   if (InBootstrapPhase)
     Config.PostFixupPasses.push_back(
         [this](LinkGraph &G) { return bootstrapPipelineEnd(G); });
@@ -967,9 +928,7 @@ void ELFNixPlatform::ELFNixPlatformPlugin::addDSOHandleSupportPasses(
       auto HandleAddr = (*I)->getAddress();
       MP.HandleAddrToJITDylib[HandleAddr] = &JD;
       MP.JITDylibToHandleAddr[&JD] = HandleAddr;
-      // assert(!MP.InitSeqs.count(&JD) && "InitSeq entry for JD already exists");
-      // MP.InitSeqs.insert(std::make_pair(
-      //     &JD, ELFNixJITDylibInitializers(JD.getName(), HandleAddr)));
+
       G.allocActions().push_back(
         {cantFail(
             WrapperFunctionCall::Create<SPSArgList<SPSString, SPSExecutorAddr>>(
@@ -1032,15 +991,6 @@ void ELFNixPlatform::ELFNixPlatformPlugin::addEHAndTLVSupportPasses(
 
     if (POSR.EHFrameSection.Start || POSR.ThreadDataSection.Start) {
 
-      // If we're still bootstrapping the runtime then just record this
-      // frame for now.
-      // if (!MP.RuntimeBootstrapped) {
-      //   std::lock_guard<std::mutex> Lock(MP.PlatformMutex);
-      //   MP.BootstrapPOSRs.push_back(POSR);
-      //   return Error::success();
-      // }
-
-      // Otherwise register it immediately.
       if (auto Err = MP.registerPerObjectSections(POSR, G, InBootstrapPhase))
         return Err;
     }
