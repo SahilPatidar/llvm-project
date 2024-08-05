@@ -58,6 +58,11 @@ using ELFNixJITDylibInitializerSequence =
 using ELFNixJITDylibDeinitializerSequence =
     std::vector<ELFNixJITDylibDeinitializers>;
 
+using ELFNixJITDylibDepInfo = std::vector<ExecutorAddr>;
+
+using ELFNixJITDylibDepInfoMap =
+    std::unordered_map<ExecutorAddr, ELFNixJITDylibDepInfo>;
+
 enum dlopen_mode : int {
   ORC_RT_RTLD_LAZY = 0x1,
   ORC_RT_RTLD_NOW = 0x2,
@@ -125,6 +130,10 @@ public:
         IB, MOJDIs.Name, MOJDIs.DSOHandleAddress, MOJDIs.InitSections);
   }
 };
+
+using SPSELFNixJITDylibDepInfo = SPSSequence<SPSExecutorAddr>;
+using SPSELFNixJITDylibDepInfoMap =
+    SPSSequence<SPSTuple<SPSExecutorAddr, SPSELFNixJITDylibDepInfo>>;
 
 } // end namespace __orc_rt
 

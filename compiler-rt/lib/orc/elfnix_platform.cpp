@@ -29,6 +29,7 @@ using namespace __orc_rt::elfnix;
 
 // Declare function tags for functions in the JIT process.
 ORC_RT_JIT_DISPATCH_TAG(__orc_rt_elfnix_get_initializers_tag)
+ORC_RT_JIT_DISPATCH_TAG(__orc_rt_elfnix_push_initializers_tag)
 ORC_RT_JIT_DISPATCH_TAG(__orc_rt_elfnix_get_deinitializers_tag)
 ORC_RT_JIT_DISPATCH_TAG(__orc_rt_elfnix_symbol_lookup_tag)
 
@@ -91,10 +92,18 @@ private:
   using AtExitsVector = std::vector<AtExitEntry>;
 
   struct PerJITDylibState {
+    std::string Name;
     void *Header = nullptr;
     size_t RefCount = 0;
+    size_t LinkedAgainstRefCount = 0;
     bool AllowReinitialization = false;
     AtExitsVector AtExits;
+    std::vector<PerJITDylibState *> Deps;
+    RecordSectionsTracker<void (*)()> RecordedInits;
+
+    bool referenced() const {
+      return LinkedAgainstRefCount != 0 || RefCount != 0;
+    }
   };
 
 public:
@@ -112,6 +121,12 @@ public:
   ELFNixPlatformRuntimeState &operator=(ELFNixPlatformRuntimeState &&) = delete;
 
   Error registerObjectSections(ELFNixPerObjectSectionsToRegister POSR);
+  Error registerJITDylib(std::string &Name, void *Handle);
+  Error deregisterJITDylib(void *Handle);
+  Error registerInits(
+    ExecutorAddr HeaderAddr, std::vector<ExecutorAddrRange> Inits);
+  Error deregisterInits(
+    ExecutorAddr HeaderAddr, std::vector<ExecutorAddrRange> Inits);
   Error deregisterObjectSections(ELFNixPerObjectSectionsToRegister POSR);
 
   const char *dlerror();
@@ -121,6 +136,8 @@ public:
 
   int registerAtExit(void (*F)(void *), void *Arg, void *DSOHandle);
   void runAtExits(void *DSOHandle);
+  void runAtExits(std::unique_lock<std::recursive_mutex> &JDStateLock,
+                  PerJITDylibState &JDS);
 
   /// Returns the base address of the section containing ThreadData.
   Expected<std::pair<const char *, size_t>>
@@ -141,7 +158,18 @@ private:
 
   Expected<ELFNixJITDylibInitializerSequence>
   getJITDylibInitializersByName(std::string_view Path);
+  Error runInits(
+    std::unique_lock<std::recursive_mutex> &JDStatesLock, PerJITDylibState &JDS);
+  Expected<void *> dlopenImpl(std::string_view Path, int Mode);
+  Error dlopenFull(std::unique_lock<std::recursive_mutex> &JDStatesLock,
+                   PerJITDylibState &JDS);
+  Error dlopenInitialize(
+    std::unique_lock<std::recursive_mutex> &JDStatesLock,
+    PerJITDylibState &JDS, ELFNixJITDylibDepInfoMap &DepInfo);
   Expected<void *> dlopenInitialize(std::string_view Path, int Mode);
+  Error dlcloseImpl(void *DSOHandle);
+  Error dlcloseInitialize(
+    std::unique_lock<std::recursive_mutex> &JDStatesLock, PerJITDylibState &JDS);
   Error initializeJITDylib(ELFNixJITDylibInitializers &MOJDIs);
 
   static ELFNixPlatformRuntimeState *MOPS;
@@ -206,6 +234,91 @@ Error ELFNixPlatformRuntimeState::registerObjectSections(
   return Error::success();
 }
 
+Error ELFNixPlatformRuntimeState::registerJITDylib(std::string &Name, void *Handle) {
+  std::lock_guard<std::recursive_mutex> Lock(JDStatesMutex);
+
+  if (JDStates.count(Handle)) {
+    std::ostringstream ErrStream;
+    ErrStream << "Duplicate JITDylib registration for header " << Handle
+              << " (name = " << Name << ")";
+    return make_error<StringError>(ErrStream.str());
+  }
+
+  if (JDNameToHeader.count(Name)) {
+    std::ostringstream ErrStream;
+    ErrStream << "Duplicate JITDylib registration for header " << Handle
+              << " (header = " << Handle << ")";
+    return make_error<StringError>(ErrStream.str());
+  }
+
+  auto &JD = JDStates[Handle];
+  JD.Header = Handle;
+  JD.Name = std::move(Name);
+  JDNameToHeader[JD.Name] = Handle;
+  return Error::success();
+}
+
+Error ELFNixPlatformRuntimeState::deregisterJITDylib(void *Handle) {
+  std::lock_guard<std::recursive_mutex> Lock(JDStatesMutex);
+
+  auto I = JDStates.find(Handle);
+  if (I == JDStates.end()) {
+    std::ostringstream ErrStream;
+    ErrStream << "Attempted to deregister unrecognized header " << Handle;
+    return make_error<StringError>(ErrStream.str());
+  }
+
+  auto J = JDNameToHeader.find(
+      std::string(I->second.Name.data(), I->second.Name.size()));
+  assert(J != JDNameToHeader.end() &&
+        "Missing JDNameToHeader entry for JITDylib");
+  JDNameToHeader.erase(J);
+  JDStates.erase(I);
+  return Error::success();
+}
+
+Error ELFNixPlatformRuntimeState::registerInits(
+  ExecutorAddr HeaderAddr, std::vector<ExecutorAddrRange> Inits) {
+
+  std::lock_guard<std::recursive_mutex> Lock(JDStatesMutex);
+  PerJITDylibState *JDS = getJITDylibStateByHeaderAddr(HeaderAddr.toPtr<void *>());
+
+  if (!JDS) {
+    std::ostringstream ErrStream;
+    ErrStream << "Could not register object platform sections for "
+                 "unrecognized header "
+              << HeaderAddr.toPtr<void *>();
+    return make_error<StringError>(ErrStream.str());
+  }
+
+  for (auto &I : Inits) {
+    JDS->RecordedInits.add(I.toSpan<void (*)()>());
+  }
+
+  return Error::success();
+}
+
+Error ELFNixPlatformRuntimeState::deregisterInits(
+    ExecutorAddr HeaderAddr, std::vector<ExecutorAddrRange> Inits) {
+
+  std::lock_guard<std::recursive_mutex> Lock(JDStatesMutex);
+  PerJITDylibState *JDS = getJITDylibStateByHeaderAddr(HeaderAddr.toPtr<void *>());
+
+  if (!JDS) {
+    std::ostringstream ErrStream;
+    ErrStream << "Could not register object platform sections for unrecognized "
+                 "header "
+              << HeaderAddr.toPtr<void *>();
+    return make_error<StringError>(ErrStream.str());
+  }
+
+  for (auto &I : Inits) {
+    JDS->RecordedInits.removeIfPresent(I);
+  }
+
+  return Error::success();
+}
+
 Error ELFNixPlatformRuntimeState::deregisterObjectSections(
     ELFNixPerObjectSectionsToRegister POSR) {
   if (POSR.EHFrameSection.Start)
@@ -217,28 +330,21 @@ Error ELFNixPlatformRuntimeState::deregisterObjectSections(
 const char *ELFNixPlatformRuntimeState::dlerror() { return DLFcnError.c_str(); }
 
 void *ELFNixPlatformRuntimeState::dlopen(std::string_view Path, int Mode) {
-  std::lock_guard<std::recursive_mutex> Lock(JDStatesMutex);
-
-  // Use fast path if all JITDylibs are already loaded and don't require
-  // re-running initializers.
-  if (auto *JDS = getJITDylibStateByName(Path)) {
-    if (!JDS->AllowReinitialization) {
-      ++JDS->RefCount;
-      return JDS->Header;
-    }
-  }
-
-  auto H = dlopenInitialize(Path, Mode);
-  if (!H) {
+  // std::lock_guard<std::recursive_mutex> Lock(JDStatesMutex);
+  if (auto H = dlopenImpl(Path, Mode))
+    return *H;
+  else {
+    // FIXME: Make dlerror thread safe.
     DLFcnError = toString(H.takeError());
     return nullptr;
   }
-
-  return *H;
 }
 
 int ELFNixPlatformRuntimeState::dlclose(void *DSOHandle) {
-  runAtExits(DSOHandle);
+  if (auto Err = dlcloseImpl(DSOHandle)) {
+      DLFcnError = toString(std::move(Err));
+    return -1;
+  }
   return 0;
 }
 
@@ -264,15 +370,16 @@ int ELFNixPlatformRuntimeState::registerAtExit(void (*F)(void *), void *Arg,
 }
 
 void ELFNixPlatformRuntimeState::runAtExits(void *DSOHandle) {
-  // FIXME: Should atexits be allowed to run concurrently with access to
-  // JDState?
-  AtExitsVector V;
-  {
-    std::lock_guard<std::recursive_mutex> Lock(JDStatesMutex);
-    auto *JDS = getJITDylibStateByHeaderAddr(DSOHandle);
-    assert(JDS && "JITDlybi state not initialized");
-    std::swap(V, JDS->AtExits);
-  }
+  std::unique_lock<std::recursive_mutex> Lock(JDStatesMutex);
+  PerJITDylibState *JDS = getJITDylibStateByHeaderAddr(DSOHandle);
+
+  if (JDS)
+    runAtExits(Lock, *JDS);
+}
+
+void ELFNixPlatformRuntimeState::runAtExits(
+  std::unique_lock<std::recursive_mutex> &JDStateLock, PerJITDylibState &JDS) {
+  AtExitsVector V = std::move(JDS.AtExits);
 
   while (!V.empty()) {
     auto &AE = V.back();
@@ -374,32 +481,168 @@ ELFNixPlatformRuntimeState::getJITDylibInitializersByName(
   return Result;
 }
 
-Expected<void *>
-ELFNixPlatformRuntimeState::dlopenInitialize(std::string_view Path, int Mode) {
-  // Either our JITDylib wasn't loaded, or it or one of its dependencies allows
-  // reinitialization. We need to call in to the JIT to see if there's any new
-  // work pending.
-  auto InitSeq = getJITDylibInitializersByName(Path);
-  if (!InitSeq)
-    return InitSeq.takeError();
+Error ELFNixPlatformRuntimeState::runInits(
+  std::unique_lock<std::recursive_mutex> &JDStatesLock, PerJITDylibState &JDS) {
+  std::vector<span<void (*)()>> InitSections;
+  InitSections.reserve(JDS.RecordedInits.numNewSections());
 
-  // Init sequences should be non-empty.
-  if (InitSeq->empty())
-    return make_error<StringError>(
-        "__orc_rt_elfnix_get_initializers returned an "
-        "empty init sequence");
+  JDS.RecordedInits.processNewSections(
+    [&](span<void (*)()> Inits) { InitSections.push_back(Inits); });
 
-  // Otherwise register and run initializers for each JITDylib.
-  for (auto &MOJDIs : *InitSeq)
-    if (auto Err = initializeJITDylib(MOJDIs))
-      return std::move(Err);
+  JDStatesLock.unlock();
+  for(auto Sec : InitSections)
+    for (auto *Init : Sec)
+      Init();
 
-  // Return the header for the last item in the list.
-  auto *JDS = getJITDylibStateByHeaderAddr(
-      InitSeq->back().DSOHandleAddress.toPtr<void *>());
-  assert(JDS && "Missing state entry for JD");
+  JDStatesLock.lock();
+
+  return Error::success();
+}
+
+Expected<void *> ELFNixPlatformRuntimeState::dlopenImpl(std::string_view Path,
+                                                        int Mode) {
+  std::unique_lock<std::recursive_mutex> Lock(JDStatesMutex);
+  PerJITDylibState *JDS = getJITDylibStateByName(Path);
+  if (!JDS)
+    return make_error<StringError>("No registered JTIDylib for path " +
+                                   std::string(Path.data(), Path.size()));
+
+  if (auto Err = dlopenFull(Lock, *JDS))
+    return std::move(Err);
+
+  ++JDS->RefCount;
+
   return JDS->Header;
 }
+
+Error ELFNixPlatformRuntimeState::dlopenFull(
+  std::unique_lock<std::recursive_mutex> &JDStateLock, PerJITDylibState &JDS) {
+  Expected<ELFNixJITDylibDepInfoMap> DepInfo((ELFNixJITDylibDepInfoMap()));
+  JDStateLock.unlock();
+  if (auto Err = WrapperFunction<SPSExpected<SPSELFNixJITDylibDepInfoMap>(
+        SPSExecutorAddr)>::call(&__orc_rt_elfnix_push_initializers_tag,
+                                DepInfo, ExecutorAddr::fromPtr(JDS.Header)))
+    return Err;
+  JDStateLock.lock();
+
+  if (!DepInfo)
+    return DepInfo.takeError();
+
+  if (auto Err = dlopenInitialize(JDStateLock, JDS, *DepInfo))
+    return Err;
+
+  if (!DepInfo->empty()) {
+    std::ostringstream ErrStream;
+    ErrStream << "Encountered unrecognized dep-info key headers "
+                 "while processing dlopen of "
+              << JDS.Name;
+    return make_error<StringError>(ErrStream.str());
+  }
+
+  return Error::success();
+}
+
+Error ELFNixPlatformRuntimeState::dlopenInitialize(
+  std::unique_lock<std::recursive_mutex> &JDStatesLock, PerJITDylibState &JDS,
+  ELFNixJITDylibDepInfoMap &DepInfo) {
+
+  auto I = DepInfo.find(ExecutorAddr::fromPtr(JDS.Header));
+  if (I == DepInfo.end())
+    return Error::success();
+
+  auto &Deps = I->second;
+  DepInfo.erase(I);
+
+  std::vector<PerJITDylibState *> OldDeps;
+  std::swap(JDS.Deps, OldDeps);
+  JDS.Deps.reserve(Deps.size());
+  for (auto H : Deps) {
+
+    PerJITDylibState *DepJDS = getJITDylibStateByHeaderAddr(H.toPtr<void *>());
+
+    if (!DepJDS) {
+      std::ostringstream ErrStream;
+      ErrStream << "Encountered unrecognized dep header "
+                << H.toPtr<void *>() << " while initializing "
+                << JDS.Name;
+      return make_error<StringError>(ErrStream.str());
+    }
+    ++DepJDS->LinkedAgainstRefCount;
+    if (auto Err = dlopenInitialize(JDStatesLock, *DepJDS, DepInfo))
+      return Err;
+  }
+
+  if (auto Err = runInits(JDStatesLock, JDS))
+    return Err;
+
+  for (auto *DepJDS : OldDeps) {
+    --DepJDS->LinkedAgainstRefCount;
+    if (!DepJDS->referenced())
+      if (auto Err = dlcloseInitialize(JDStatesLock, *DepJDS))
+        return Err;
+  }
+  return Error::success();
+}
+
+Error ELFNixPlatformRuntimeState::dlcloseImpl(void *DSOHandle) {
+  std::unique_lock<std::recursive_mutex> Lock(JDStatesMutex);
+  PerJITDylibState *JDS = getJITDylibStateByHeaderAddr(DSOHandle);
+  if (!JDS) {
+    std::ostringstream ErrStream;
+    ErrStream << "No registered JITDylib for " << DSOHandle;
+    return make_error<StringError>(ErrStream.str());
+  }
+
+  --JDS->RefCount;
+
+  if (!JDS->referenced())
+    return dlcloseInitialize(Lock, *JDS);
+
+  return Error::success();
+}
+
+Error ELFNixPlatformRuntimeState::dlcloseInitialize(
+  std::unique_lock<std::recursive_mutex> &JDStatesLock, PerJITDylibState &JDS) {
+
+  runAtExits(JDStatesLock, JDS);
+
+  JDS.RecordedInits.reset();
+
+  for (auto *DepJDS : JDS.Deps)
+    if (JDS.RefCount != 0)
+      if (auto Err = dlcloseInitialize(JDStatesLock, *DepJDS))
+        return Err;
+
+  return Error::success();
+}
+
+// Expected<void *>
+// ELFNixPlatformRuntimeState::dlopenInitialize(std::string_view Path, int Mode) {
+//   // Either our JITDylib wasn't loaded, or it or one of its dependencies allows
+//   // reinitialization. We need to call in to the JIT to see if there's any new
+//   // work pending.
+//   // std::unique_lock<std::mutex> Lock(JDStatesMutex);
+//   auto InitSeq = getJITDylibInitializersByName(Path);
+//   if (!InitSeq)
+//     return InitSeq.takeError();
+
+//   // Init sequences should be non-empty.
+//   if (InitSeq->empty())
+//     return make_error<StringError>(
+//         "__orc_rt_elfnix_get_initializers returned an "
+//         "empty init sequence");
+
+//   // Otherwise register and run initializers for each JITDylib.
+//   for (auto &MOJDIs : *InitSeq)
+//     if (auto Err = initializeJITDylib(MOJDIs))
+//       return std::move(Err);
+
+//   // Return the header for the last item in the list.
+//   auto *JDS = getJITDylibStateByHeaderAddr(
+//       InitSeq->back().DSOHandleAddress.toPtr<void *>());
+//   assert(JDS && "Missing state entry for JD");
+//   return JDS->Header;
+// }
 
 long getPriority(const std::string &name) {
   auto pos = name.find_last_not_of("0123456789");
@@ -470,13 +713,24 @@ void destroyELFNixTLVMgr(void *ELFNixTLVMgr) {
 //                             JIT entry points
 //------------------------------------------------------------------------------
 
+// ORC_RT_INTERFACE orc_rt_CWrapperFunctionResult
+// __orc_rt_elfnix_platform_bootstrap(char *ArgData, size_t ArgSize) {
+//   return WrapperFunction<void(uint64_t)>::handle(
+//              ArgData, ArgSize,
+//              [](uint64_t &DSOHandle) {
+//                ELFNixPlatformRuntimeState::initialize(
+//                    reinterpret_cast<void *>(DSOHandle));
+//              })
+//       .release();
+// }
+
 ORC_RT_INTERFACE orc_rt_CWrapperFunctionResult
 __orc_rt_elfnix_platform_bootstrap(char *ArgData, size_t ArgSize) {
-  return WrapperFunction<void(uint64_t)>::handle(
+  return WrapperFunction<SPSError(SPSExecutorAddr)>::handle(
              ArgData, ArgSize,
-             [](uint64_t &DSOHandle) {
+             [](ExecutorAddr DSOHandle) {
                ELFNixPlatformRuntimeState::initialize(
-                   reinterpret_cast<void *>(DSOHandle));
+                   reinterpret_cast<void *>(DSOHandle.getValue()));
              })
       .release();
 }
@@ -485,6 +739,50 @@ ORC_RT_INTERFACE orc_rt_CWrapperFunctionResult
 __orc_rt_elfnix_platform_shutdown(char *ArgData, size_t ArgSize) {
   ELFNixPlatformRuntimeState::destroy();
   return WrapperFunctionResult().release();
+}
+
+ORC_RT_INTERFACE orc_rt_CWrapperFunctionResult
+__orc_rt_elfnix_register_jitdylib(char *ArgData, size_t ArgSize) {
+  return WrapperFunction<SPSError(SPSString, SPSExecutorAddr)>::
+    handle(ArgData, ArgSize,
+            [](std::string &JDName, ExecutorAddr HeaderAddr) {
+              return ELFNixPlatformRuntimeState::get().registerJITDylib(
+                JDName, HeaderAddr.toPtr<void *>());
+            }).release();
+}
+
+ORC_RT_INTERFACE orc_rt_CWrapperFunctionResult
+__orc_rt_elfnix_deregister_jitdylib(char *ArgData, size_t ArgSize) {
+  return WrapperFunction<SPSError(SPSExecutorAddr)>::
+    handle(ArgData, ArgSize,
+            [](ExecutorAddr HeaderAddr) {
+              return ELFNixPlatformRuntimeState::get().deregisterJITDylib(
+                HeaderAddr.toPtr<void *>());
+            }).release();
+}
+
+ORC_RT_INTERFACE orc_rt_CWrapperFunctionResult
+__orc_rt_elfnix_register_init_sections(char *ArgData, size_t ArgSize) {
+  return WrapperFunction<SPSError(SPSExecutorAddr,
+                                  SPSSequence<SPSExecutorAddrRange>)>::
+    handle(ArgData, ArgSize,
+            [](ExecutorAddr HeaderAddr, std::vector<ExecutorAddrRange> &Inits) {
+              return ELFNixPlatformRuntimeState::get().registerInits(
+                  HeaderAddr, std::move(Inits));
+            })
+        .release();
+}
+
+ORC_RT_INTERFACE orc_rt_CWrapperFunctionResult
+__orc_rt_elfnix_deregister_init_sections(char *ArgData, size_t ArgSize) {
+  return WrapperFunction<SPSError(SPSExecutorAddr,
+                                  SPSSequence<SPSExecutorAddrRange>)>::
+    handle(ArgData, ArgSize,
+            [](ExecutorAddr HeaderAddr, std::vector<ExecutorAddrRange> &Inits) {
+              return ELFNixPlatformRuntimeState::get().deregisterInits(
+                  HeaderAddr, std::move(Inits));
+            })
+        .release();
 }
 
 /// Wrapper function for registering metadata on a per-object basis.
