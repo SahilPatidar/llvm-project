@@ -7,8 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ExecutionEngine/Orc/TargetProcess/SimpleExecutorDylibManager.h"
-
 #include "llvm/ExecutionEngine/Orc/Shared/OrcRTBridge.h"
+
+#include "llvm/Support/MSVCErrorWorkarounds.h"
+
+#include <future>
+#include <optional>
 
 #define DEBUG_TYPE "orc"
 
@@ -35,47 +39,51 @@ SimpleExecutorDylibManager::open(const std::string &Path, uint64_t Mode) {
 
   std::lock_guard<std::mutex> Lock(M);
   auto H = ExecutorAddr::fromPtr(DL.getOSSpecificHandle());
+
   Dylibs.insert(DL.getOSSpecificHandle());
-  return H;
+
+  Resolvers.push_back(std::make_unique<DylibSymbolResolver>(H));
+  return ExecutorAddr::fromPtr(Resolvers.back().get());
+  // return H;
 }
 
-Expected<std::vector<ExecutorSymbolDef>>
-SimpleExecutorDylibManager::lookup(tpctypes::DylibHandle H,
-                                   const RemoteSymbolLookupSet &L) {
-  std::vector<ExecutorSymbolDef> Result;
-  auto DL = sys::DynamicLibrary(H.toPtr<void *>());
+// Expected<std::vector<ExecutorSymbolDef>>
+// SimpleExecutorDylibManager::lookup(tpctypes::DylibHandle H,
+//                                    const RemoteSymbolLookupSet &L) {
+//   std::vector<ExecutorSymbolDef> Result;
+//   auto DL = sys::DynamicLibrary(H.toPtr<void *>());
 
-  for (const auto &E : L) {
-    if (E.Name.empty()) {
-      if (E.Required)
-        return make_error<StringError>("Required address for empty symbol \"\"",
-                                       inconvertibleErrorCode());
-      else
-        Result.push_back(ExecutorSymbolDef());
-    } else {
+//   for (const auto &E : L) {
+//     if (E.Name.empty()) {
+//       if (E.Required)
+//         return make_error<StringError>("Required address for empty symbol \"\"",
+//                                        inconvertibleErrorCode());
+//       else
+//         Result.push_back(ExecutorSymbolDef());
+//     } else {
 
-      const char *DemangledSymName = E.Name.c_str();
-#ifdef __APPLE__
-      if (E.Name.front() != '_')
-        return make_error<StringError>(Twine("MachO symbol \"") + E.Name +
-                                           "\" missing leading '_'",
-                                       inconvertibleErrorCode());
-      ++DemangledSymName;
-#endif
+//       const char *DemangledSymName = E.Name.c_str();
+// #ifdef __APPLE__
+//       if (E.Name.front() != '_')
+//         return make_error<StringError>(Twine("MachO symbol \"") + E.Name +
+//                                            "\" missing leading '_'",
+//                                        inconvertibleErrorCode());
+//       ++DemangledSymName;
+// #endif
 
-      void *Addr = DL.getAddressOfSymbol(DemangledSymName);
-      if (!Addr && E.Required)
-        return make_error<StringError>(Twine("Missing definition for ") +
-                                           DemangledSymName,
-                                       inconvertibleErrorCode());
+//       void *Addr = DL.getAddressOfSymbol(DemangledSymName);
+//       if (!Addr && E.Required)
+//         return make_error<StringError>(Twine("Missing definition for ") +
+//                                            DemangledSymName,
+//                                        inconvertibleErrorCode());
 
-      // FIXME: determine accurate JITSymbolFlags.
-      Result.push_back({ExecutorAddr::fromPtr(Addr), JITSymbolFlags::Exported});
-    }
-  }
+//       // FIXME: determine accurate JITSymbolFlags.
+//       Result.push_back({ExecutorAddr::fromPtr(Addr), JITSymbolFlags::Exported});
+//     }
+//   }
 
-  return Result;
-}
+//   return Result;
+// }
 
 Error SimpleExecutorDylibManager::shutdown() {
 
@@ -94,8 +102,10 @@ void SimpleExecutorDylibManager::addBootstrapSymbols(
   M[rt::SimpleExecutorDylibManagerInstanceName] = ExecutorAddr::fromPtr(this);
   M[rt::SimpleExecutorDylibManagerOpenWrapperName] =
       ExecutorAddr::fromPtr(&openWrapper);
-  M[rt::SimpleExecutorDylibManagerLookupWrapperName] =
-      ExecutorAddr::fromPtr(&lookupWrapper);
+  M[rt::SimpleExecutorDylibManagerResolveWrapperName] =
+      ExecutorAddr::fromPtr(&resolveWrapper);
+  // M[rt::SimpleExecutorDylibManagerLookupWrapperName] =
+  //     ExecutorAddr::fromPtr(&lookupWrapper);
 }
 
 llvm::orc::shared::CWrapperFunctionResult
@@ -109,12 +119,20 @@ SimpleExecutorDylibManager::openWrapper(const char *ArgData, size_t ArgSize) {
 }
 
 llvm::orc::shared::CWrapperFunctionResult
-SimpleExecutorDylibManager::lookupWrapper(const char *ArgData, size_t ArgSize) {
+SimpleExecutorDylibManager::resolveWrapper(const char *ArgData, size_t ArgSize) {
+  using ResolveResult = ExecutorResolver::ResolveResult;
+
   return shared::
-      WrapperFunction<rt::SPSSimpleExecutorDylibManagerLookupSignature>::handle(
+      WrapperFunction<rt::SPSSimpleExecutorDylibManagerResolveSignature>::handle(
              ArgData, ArgSize,
-             shared::makeMethodWrapperHandler(
-                 &SimpleExecutorDylibManager::lookup))
+             [](ExecutorAddr Obj, RemoteSymbolLookupSet L) -> ResolveResult {
+               using TmpResult = MSVCPExpected<std::vector<ExecutorSymbolDef>>;
+               std::promise<TmpResult> P;
+               auto F = P.get_future();
+               Obj.toPtr<ExecutorResolver *>()->resolveAsync(
+                   L, [&](TmpResult R) { P.set_value(std::move(R)); });
+               return F.get();
+             })
           .release();
 }
 
