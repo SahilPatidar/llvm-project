@@ -24,7 +24,27 @@ SimpleExecutorDylibManager::~SimpleExecutorDylibManager() {
   assert(Dylibs.empty() && "shutdown not called?");
 }
 
-Expected<tpctypes::DylibHandle>
+// Expected<tpctypes::DylibHandle>
+// SimpleExecutorDylibManager::open(const std::string &Path, uint64_t Mode) {
+//   if (Mode != 0)
+//     return make_error<StringError>("open: non-zero mode bits not yet supported",
+//                                    inconvertibleErrorCode());
+
+//   const char *PathCStr = Path.empty() ? nullptr : Path.c_str();
+//   std::string ErrMsg;
+
+//   auto DL = sys::DynamicLibrary::getPermanentLibrary(PathCStr, &ErrMsg);
+//   if (!DL.isValid())
+//     return make_error<StringError>(std::move(ErrMsg), inconvertibleErrorCode());
+
+//   std::lock_guard<std::mutex> Lock(M);
+//   auto H = ExecutorAddr::fromPtr(DL.getOSSpecificHandle());
+
+//   Dylibs.insert(DL.getOSSpecificHandle());
+//   return H;
+// }
+
+Expected<tpctypes::ResolverHandle>
 SimpleExecutorDylibManager::open(const std::string &Path, uint64_t Mode) {
   if (Mode != 0)
     return make_error<StringError>("open: non-zero mode bits not yet supported",
@@ -44,7 +64,6 @@ SimpleExecutorDylibManager::open(const std::string &Path, uint64_t Mode) {
 
   Resolvers.push_back(std::make_unique<DylibSymbolResolver>(H));
   return ExecutorAddr::fromPtr(Resolvers.back().get());
-  // return H;
 }
 
 // Expected<std::vector<ExecutorSymbolDef>>

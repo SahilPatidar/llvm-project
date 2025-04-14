@@ -118,7 +118,7 @@ Expected<tpctypes::DylibHandle> EPCGenericDylibManager::open(StringRef Path,
 //       SAs.Instance, H, Lookup);
 // }
 
-void EPCGenericDylibManager::lookupAsync(tpctypes::DylibHandle H,
+void EPCGenericDylibManager::lookupAsync(tpctypes::ResolverHandle H,
                                          const SymbolLookupSet &Lookup,
                                          SymbolLookupCompleteFn Complete) {
   EPC.callSPSWrapperAsync<rt::SPSSimpleExecutorDylibManagerResolveSignature>(
@@ -136,7 +136,7 @@ void EPCGenericDylibManager::lookupAsync(tpctypes::DylibHandle H,
       H, Lookup);
 }
 
-void EPCGenericDylibManager::lookupAsync(tpctypes::DylibHandle H,
+void EPCGenericDylibManager::lookupAsync(tpctypes::ResolverHandle H,
                                          const RemoteSymbolLookupSet &Lookup,
                                          SymbolLookupCompleteFn Complete) {
   EPC.callSPSWrapperAsync<rt::SPSSimpleExecutorDylibManagerResolveSignature>(

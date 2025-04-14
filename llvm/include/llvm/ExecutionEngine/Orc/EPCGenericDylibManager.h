@@ -70,12 +70,20 @@ public:
   using SymbolLookupCompleteFn =
       unique_function<void(Expected<std::vector<ExecutorSymbolDef>>)>;
 
-  /// Looks up symbols within the given dylib.
-  void lookupAsync(tpctypes::DylibHandle H, const SymbolLookupSet &Lookup,
+  // /// Looks up symbols within the given dylib.
+  // void lookupAsync(tpctypes::DylibHandle H, const SymbolLookupSet &Lookup,
+  //                  SymbolLookupCompleteFn Complete);
+
+  // /// Looks up symbols within the given dylib.
+  // void lookupAsync(tpctypes::DylibHandle H, const RemoteSymbolLookupSet &Lookup,
+  //                  SymbolLookupCompleteFn Complete);
+
+  /// Looks up symbols within the given dylib resolver.
+  void lookupAsync(tpctypes::ResolverHandle H, const SymbolLookupSet &Lookup,
                    SymbolLookupCompleteFn Complete);
 
-  /// Looks up symbols within the given dylib.
-  void lookupAsync(tpctypes::DylibHandle H, const RemoteSymbolLookupSet &Lookup,
+  /// Looks up symbols within the given dylib resolver.
+  void lookupAsync(tpctypes::ResolverHandle H, const RemoteSymbolLookupSet &Lookup,
                    SymbolLookupCompleteFn Complete);
 
 private:

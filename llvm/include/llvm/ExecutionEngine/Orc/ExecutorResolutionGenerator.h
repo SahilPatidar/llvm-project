@@ -13,17 +13,15 @@
 #ifndef LLVM_EXECUTIONENGINE_ORC_EXECUTORRESOLUTIONGENERATOR_H
 #define LLVM_EXECUTIONENGINE_ORC_EXECUTORRESOLUTIONGENERATOR_H
 
-#include "llvm/ExecutionEngine/Orc/Shared/ExecutorSymbolDef.h"
 #include "llvm/ExecutionEngine/Orc/Core.h"
+#include "llvm/ExecutionEngine/Orc/Shared/ExecutorSymbolDef.h"
 
 namespace llvm::orc {
 
 class ExecutorResolutionGenerator : public DefinitionGenerator {
 public:
-  using ResolverHandle = ExecutorAddr;
-
   ExecutorResolutionGenerator(ExecutorProcessControl &EPC,
-                               ResolverHandle ResolveObj)
+                              tpctypes::ResolverHandle ResolveObj)
       : EPC(EPC), ResolveObj(ResolveObj) {}
   ExecutorResolutionGenerator(ExecutorProcessControl &EPC) : EPC(EPC) {}
 
@@ -36,12 +34,13 @@ public:
   Error tryToGenerate(LookupState &LS, LookupKind K, JITDylib &JD,
                       JITDylibLookupFlags JDLookupFlags,
                       const SymbolLookupSet &LookupSet) override;
+
 private:
-    ExecutorProcessControl &EPC;
-    // ExecutorAddr ResolveFunc;
-    ResolverHandle ResolveObj;
+  ExecutorProcessControl &EPC;
+  // ExecutorAddr ResolveFunc;
+  tpctypes::ResolverHandle ResolveObj;
 };
 
-}
+} // namespace llvm::orc
 
 #endif // LLVM_EXECUTIONENGINE_ORC_EXECUTORRESOLUTIONGENERATOR_H
