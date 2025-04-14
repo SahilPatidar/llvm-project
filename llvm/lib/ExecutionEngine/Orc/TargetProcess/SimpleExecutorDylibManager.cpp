@@ -24,26 +24,6 @@ SimpleExecutorDylibManager::~SimpleExecutorDylibManager() {
   assert(Dylibs.empty() && "shutdown not called?");
 }
 
-// Expected<tpctypes::DylibHandle>
-// SimpleExecutorDylibManager::open(const std::string &Path, uint64_t Mode) {
-//   if (Mode != 0)
-//     return make_error<StringError>("open: non-zero mode bits not yet supported",
-//                                    inconvertibleErrorCode());
-
-//   const char *PathCStr = Path.empty() ? nullptr : Path.c_str();
-//   std::string ErrMsg;
-
-//   auto DL = sys::DynamicLibrary::getPermanentLibrary(PathCStr, &ErrMsg);
-//   if (!DL.isValid())
-//     return make_error<StringError>(std::move(ErrMsg), inconvertibleErrorCode());
-
-//   std::lock_guard<std::mutex> Lock(M);
-//   auto H = ExecutorAddr::fromPtr(DL.getOSSpecificHandle());
-
-//   Dylibs.insert(DL.getOSSpecificHandle());
-//   return H;
-// }
-
 Expected<tpctypes::ResolverHandle>
 SimpleExecutorDylibManager::open(const std::string &Path, uint64_t Mode) {
   if (Mode != 0)
@@ -66,44 +46,6 @@ SimpleExecutorDylibManager::open(const std::string &Path, uint64_t Mode) {
   return ExecutorAddr::fromPtr(Resolvers.back().get());
 }
 
-// Expected<std::vector<ExecutorSymbolDef>>
-// SimpleExecutorDylibManager::lookup(tpctypes::DylibHandle H,
-//                                    const RemoteSymbolLookupSet &L) {
-//   std::vector<ExecutorSymbolDef> Result;
-//   auto DL = sys::DynamicLibrary(H.toPtr<void *>());
-
-//   for (const auto &E : L) {
-//     if (E.Name.empty()) {
-//       if (E.Required)
-//         return make_error<StringError>("Required address for empty symbol \"\"",
-//                                        inconvertibleErrorCode());
-//       else
-//         Result.push_back(ExecutorSymbolDef());
-//     } else {
-
-//       const char *DemangledSymName = E.Name.c_str();
-// #ifdef __APPLE__
-//       if (E.Name.front() != '_')
-//         return make_error<StringError>(Twine("MachO symbol \"") + E.Name +
-//                                            "\" missing leading '_'",
-//                                        inconvertibleErrorCode());
-//       ++DemangledSymName;
-// #endif
-
-//       void *Addr = DL.getAddressOfSymbol(DemangledSymName);
-//       if (!Addr && E.Required)
-//         return make_error<StringError>(Twine("Missing definition for ") +
-//                                            DemangledSymName,
-//                                        inconvertibleErrorCode());
-
-//       // FIXME: determine accurate JITSymbolFlags.
-//       Result.push_back({ExecutorAddr::fromPtr(Addr), JITSymbolFlags::Exported});
-//     }
-//   }
-
-//   return Result;
-// }
-
 Error SimpleExecutorDylibManager::shutdown() {
 
   DylibSet DS;
@@ -123,8 +65,6 @@ void SimpleExecutorDylibManager::addBootstrapSymbols(
       ExecutorAddr::fromPtr(&openWrapper);
   M[rt::SimpleExecutorDylibManagerResolveWrapperName] =
       ExecutorAddr::fromPtr(&resolveWrapper);
-  // M[rt::SimpleExecutorDylibManagerLookupWrapperName] =
-  //     ExecutorAddr::fromPtr(&lookupWrapper);
 }
 
 llvm::orc::shared::CWrapperFunctionResult
