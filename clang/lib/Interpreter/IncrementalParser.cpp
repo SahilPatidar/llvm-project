@@ -172,6 +172,28 @@ IncrementalParser::Parse(llvm::StringRef input) {
   return PTU;
 }
 
+template <typename decl_type>
+void IncrementalParser::RepairRedeclChain(decl_type *D,
+                                          TranslationUnitDecl *PTU) {
+  decl_type *NewLatestDecl = nullptr;
+  decl_type *It = D->getMostRecentDecl();
+  while (It) {
+    if (It->getTranslationUnitDecl() != PTU) {
+      NewLatestDecl = It;
+      break;
+    }
+    if (It == It->getFirstDecl())
+      break;
+    It = It->getPreviousDecl();
+  }
+
+  if (!NewLatestDecl)
+    return; // entire chain from FailedTU
+
+  Redeclarable<decl_type> *RD = D->getFirstDecl();
+  RD->RedeclLink.setLatest(NewLatestDecl);
+}
+
 void IncrementalParser::CleanUpPTU(TranslationUnitDecl *MostRecentTU) {
   if (StoredDeclsMap *Map = MostRecentTU->getPrimaryContext()->getLookupPtr()) {
     // Collect the keys to erase: erasing during iteration invalidates the map
@@ -231,6 +253,9 @@ void IncrementalParser::CleanUpPTU(TranslationUnitDecl *MostRecentTU) {
         !D->getLangOpts().CPlusPlus)
       S.IdResolver.RemoveDecl(ND);
   }
+
+  RepairRedeclChain(MostRecentTU, MostRecentTU);
+  S.getASTContext().setTranslationUnitDecl(MostRecentTU->getPreviousDecl());
 }
 
 PartialTranslationUnit &

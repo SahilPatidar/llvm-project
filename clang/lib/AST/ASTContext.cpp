@@ -5586,6 +5586,10 @@ QualType ASTContext::getTagType(ElaboratedTypeKeyword Keyword,
                            /*Qualifier=*/std::nullopt, NonInjectedTD,
                            /*OwnsTag=*/false, IsInjected, CanonicalType,
                            /*WithFoldingSetNode=*/false);
+
+    if (IncrementalErrorRecoveryMode)
+      PendingTypeForDeclMutations.push_back({const_cast<TagDecl *>(TD), TD->TypeForDecl});
+
     TD->TypeForDecl = T;
     return QualType(T, 0);
   }
